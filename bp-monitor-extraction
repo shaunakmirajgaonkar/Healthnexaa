@@ -1,1 +1,132 @@
+!pip install openai
+import io
+import time
+import json
+import base64
+import pandas as pd
+from pathlib import Path
+from PIL import Image, UnidentifiedImageError
+from openai import OpenAI
 
+# ==========================================
+# 1. Configuration
+# ==========================================
+API_KEY = "YOUR API KEY"  # paste your OpenAI key here, never in chat
+client = OpenAI(api_key=API_KEY)
+
+IMAGE_FOLDER_PATH = Path('/Users/shaunak/Desktop/untitled folder 3')
+
+# ==========================================
+# 2. Extraction Function
+# ==========================================
+def analyze_screen(image_path: Path, max_retries=5):
+    try:
+        img = Image.open(image_path)
+
+        # Resize to max 1024px
+        img.thumbnail((1024, 1024), Image.LANCZOS)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+
+        # Save to buffer and encode as base64
+        buffer = io.BytesIO()
+        img.save(buffer, format='JPEG', quality=90)
+        b64 = base64.b64encode(buffer.getvalue()).decode()
+        print(f"   📐 Resized to {img.size}")
+
+    except (UnidentifiedImageError, Exception) as e:
+        print(f"⏭️ Skipping {image_path.name}: unreadable image ({e})")
+        return None
+
+    prompt = """Analyze this blood pressure monitor image and extract values.
+Return ONLY a valid JSON object with exactly these keys:
+{
+  "systolic": <int, 0 if unreadable>,
+  "diastolic": <int, 0 if unreadable>,
+  "pulse": <int, 0 if unreadable>,
+  "brand": "<string, 'Unknown' if not visible>",
+  "has_glare": <true or false>
+}
+No extra text, no markdown, just the JSON."""
+
+    attempt = 0
+    while attempt < max_retries:
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64}"
+                        }}
+                    ]
+                }],
+                temperature=0.0,
+                max_tokens=200
+            )
+            raw = response.choices[0].message.content.strip()
+            raw = raw.replace("```json", "").replace("```", "").strip()
+            data = json.loads(raw)
+            data["file_name"] = image_path.name
+            return data
+
+        except Exception as e:
+            attempt += 1
+            wait_time = (2 ** attempt) * 5
+            print(f"⚠️ Error: {e}. Retrying in {wait_time}s... (Attempt {attempt}/{max_retries})")
+            time.sleep(wait_time)
+
+    print(f"⏭️ Skipping {image_path.name}: max retries exceeded.")
+    return None
+
+# ==========================================
+# 3. Main
+# ==========================================
+def main():
+    if not IMAGE_FOLDER_PATH.exists():
+        print(f"❌ Directory not found: {IMAGE_FOLDER_PATH}")
+        return
+
+    extensions = {'.png', '.jpg', '.jpeg'}
+    images = [f for f in IMAGE_FOLDER_PATH.iterdir() if f.suffix.lower() in extensions]
+
+    print(f"🔍 Found {len(images)} images. Starting extraction...")
+    print(f"⏱️ Estimated time: ~{len(images) * 3 // 60}m {len(images) * 3 % 60}s\n")
+
+    extracted_rows = []
+    skipped = 0
+
+    for i, img_path in enumerate(images, 1):
+        print(f"[{i}/{len(images)}] Reading: {img_path.name}...")
+        row_data = analyze_screen(img_path)
+
+        if row_data is not None:
+            extracted_rows.append(row_data)
+            print(f"✅ Done: BP {row_data.get('systolic')}/{row_data.get('diastolic')}, Pulse {row_data.get('pulse')}")
+        else:
+            skipped += 1
+
+        if i < len(images):
+            print(f"⏳ Waiting 3s...\n")
+            time.sleep(3)
+
+    print(f"\n✅ Extraction complete. {len(extracted_rows)} succeeded, {skipped} skipped.")
+
+    if not extracted_rows:
+        print("⚠️ No data extracted. CSV not saved.")
+        return
+
+    df = pd.DataFrame(extracted_rows)
+    cols = ['file_name'] + [c for c in df.columns if c != 'file_name']
+    df = df[cols]
+
+    csv_path = "medical_data_export.csv"
+    df.to_csv(csv_path, index=False)
+
+    display(df)
+    print(f"📊 Table saved as: {csv_path}")
+
+if __name__ == "__main__":
+    main()
