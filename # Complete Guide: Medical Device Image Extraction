@@ -27,17 +27,26 @@ This is harder than general OCR because:
 | Wrist automatic | Smaller LCD | Omron, Andes |
 | Manual (sphygmomanometer) | Analog dial | Welch Allyn |
 
-**Fields on screen:**
-- Systolic (top large number, mmHg)
-- Diastolic (bottom large number, mmHg)
-- Pulse / heart rate (BPM)
-- Date/time (many devices)
-- Memory slot indicator (M1, M2)
-- IHB symbol (irregular heartbeat)
-- Afib indicator (newer devices)
-- Error codes (E1–E5 etc.)
-- User indicator (User 1 / User 2)
-- Battery indicator
+**Fields on screen (full extraction schema):**
+
+```json
+{
+  "systolic": int,
+  "diastolic": int,
+  "pulse": int,
+  "brand": "string",
+  "date": "YYYY-MM-DD",
+  "time": "HH:MM",
+  "memory_slot": "M1 / M2 / null",
+  "ihb": bool,
+  "afib": bool,
+  "error_code": "E1–E5 / null",
+  "user": "User 1 / User 2 / null",
+  "battery_low": bool,
+  "has_glare": bool,
+  "confidence": "1–10"
+}
+```
 
 ### Glucometers (Blood Glucose Monitors)
 
@@ -47,15 +56,25 @@ This is harder than general OCR because:
 | Continuous CGM reader | Color LCD with graph | FreeStyle Libre, Dexcom |
 | Smart glucometer | Large color screen | LifeScan, Dario |
 
-**Fields on screen:**
-- Blood glucose value (mg/dL or mmol/L)
-- Unit (mg/dL vs mmol/L — critical distinction)
-- Date and time
-- Pre/post meal indicator
-- HI / LO flags (out of range)
-- Average readings
-- Control solution indicator
-- Battery level
+**Fields on screen (full extraction schema):**
+
+```json
+{
+  "glucose_value": "number or null if HI/LO/error",
+  "unit": "mg/dL or mmol/L",
+  "is_high": bool,
+  "is_low": bool,
+  "meal_marker": "pre-meal / post-meal / none / unknown",
+  "date": "YYYY-MM-DD or null",
+  "time": "HH:MM or null",
+  "average_readings": "number or null",
+  "control_solution": bool,
+  "battery_low": bool,
+  "error_code": "string or null",
+  "brand": "string or Unknown",
+  "confidence": "1–10"
+}
+```
 
 ### Other Extractable Devices (Future Scope)
 - Pulse oximeters (SpO2 + pulse)
