@@ -89,11 +89,25 @@ This is harder than general OCR because:
 
 ---
 
-### Approach 1: LLM Vision API (GPT-4o / Gemini / Claude)
+### Approach 1: LLM Vision API (Gemini / GPT-4o / Claude) ⭐ Current Approach
 
 **How it works:**
 Send the image to a multimodal LLM with a prompt asking it to read the display and return structured JSON.
 
+**Current implementation uses Gemini 1.5 Flash (free tier)** — 15 requests/min, 1,500/day, no credit card required. Get a key at [aistudio.google.com](https://aistudio.google.com).
+
+```python
+import google.generativeai as genai
+from PIL import Image
+
+genai.configure(api_key=API_KEY)
+model = genai.GenerativeModel("gemini-1.5-flash")
+
+img = Image.open("bp_reading.jpg")
+response = model.generate_content([prompt, img])
+```
+
+**Full extraction prompt (14 fields):**
 ```python
 prompt = """Read this BP monitor display. Return ONLY JSON:
 {
@@ -101,6 +115,14 @@ prompt = """Read this BP monitor display. Return ONLY JSON:
   "diastolic": int,
   "pulse": int,
   "brand": string,
+  "date": "YYYY-MM-DD or null",
+  "time": "HH:MM or null",
+  "memory_slot": "M1, M2, or null",
+  "ihb": bool,
+  "afib": bool,
+  "error_code": "string or null",
+  "user": "User 1, User 2, or null",
+  "battery_low": bool,
   "has_glare": bool,
   "confidence": int  # 1-10
 }"""
@@ -110,18 +132,18 @@ prompt = """Read this BP monitor display. Return ONLY JSON:
 - Works on almost any device, any angle, any lighting
 - Zero training data needed
 - Handles glare, rotation, partial occlusion
-- Can extract ALL fields in one call
-- Understands context (knows what a BP monitor looks like)
-- Handles error codes, symbols, indicators
+- Extracts ALL fields in one call (14 fields)
+- Understands context, symbols, and error codes
+- **Free tier available (Gemini 1.5 Flash)**
 
 **Cons:**
-- Costs money per call
+- Free tier has rate limits (15 RPM, 1,500/day)
 - Data goes to third-party servers (privacy concern)
 - Slower than local methods (~1–3 seconds/image)
 - Occasional hallucinations (makes up numbers)
 - Needs internet
 
-**Best for:** Rapid prototyping, low volume, maximum accuracy with zero setup
+**Best for:** Rapid prototyping, free usage, maximum field extraction with zero setup
 
 ---
 
@@ -610,6 +632,8 @@ For personal/family use, OpenAI's standard terms are generally acceptable. For a
 | Enterprise / HIPAA | Custom trained model + on-premise deployment |
 
 **Single best starting point:** Extend the current GPT-4o script to also support glucometers, switch to Gemini 1.5 Flash to cut costs, then build a FastAPI web interface around it. This gives you a working multi-device health data platform in 3–4 weeks with minimal infrastructure.
+
+**For unlimited, complete data extraction (no field limits):** Use the LLM Vision API (Gemini 1.5 Flash as primary, GPT-4o as fallback). It extracts every field in a single call, requires no retraining for new devices, understands symbols and error codes, and imposes no schema restrictions — making it the best choice when maximum data completeness is the priority over cost or speed.
 
 ---
 
