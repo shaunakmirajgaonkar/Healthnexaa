@@ -28,7 +28,7 @@ ollama pull medgemma1.5:4b
 pip install git+https://github.com/shaunakmirajgaonkar/Healthnexaa.git
 ```
 
-**Once published to PyPI:**
+**From PyPI (recommended):**
 ```bash
 pip install medextract
 ```
