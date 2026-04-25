@@ -4,6 +4,19 @@ All notable changes to this project will be documented here.
 
 ---
 
+## [0.3.0] — 2026-04-25
+
+### Added
+- `resume_csv` parameter on `extract_folder()` — skips images already in an existing CSV, allowing large batches to be safely resumed after a crash
+- `--resume` flag on the CLI — resumes from the existing `--output` CSV
+- `tqdm` progress bar in `extract_folder()` — shows current image, BP reading, and ETA in real time
+- `tqdm>=4.66.1` added to dependencies
+
+### Fixed
+- 33 tests now passing (added 2 new tests for resume functionality)
+
+---
+
 ## [0.2.0] — 2026-04-25
 
 ### Added

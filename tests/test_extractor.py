@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
-from medextract import analyze_image, classify_bp, validate_bp
+from medextract import analyze_image, classify_bp, extract_folder, validate_bp
 from medextract.extractor import load_image_b64, check_ollama
 
 
@@ -216,3 +216,54 @@ class TestAnalyzeImage:
             result = analyze_image(img_path)
         assert result is not None
         assert result["systolic"] == 130
+
+
+# ---------------------------------------------------------------------------
+# extract_folder — resume
+# ---------------------------------------------------------------------------
+
+class TestExtractFolderResume:
+    def _make_images(self, folder: Path, count: int):
+        for i in range(count):
+            Image.new("RGB", (100, 100), color=(i * 10, 0, 0)).save(folder / f"img_{i:03d}.jpg")
+
+    def test_skips_already_done_images(self, tmp_path):
+        self._make_images(tmp_path, 3)
+
+        # Simulate a CSV that already has img_000 and img_001
+        import pandas as pd
+        csv_path = tmp_path / "out.csv"
+        pd.DataFrame([
+            {"file_name": "img_000.jpg", "systolic": 120, "diastolic": 80},
+            {"file_name": "img_001.jpg", "systolic": 130, "diastolic": 85},
+        ]).to_csv(csv_path, index=False)
+
+        mock_model = MagicMock()
+        mock_model.model = "medgemma1.5:4b"
+        mock_response = MagicMock()
+        mock_response.models = [mock_model]
+
+        with patch("ollama.list", return_value=mock_response):
+            with patch("ollama.chat", return_value=MOCK_RESPONSE):
+                rows = extract_folder(tmp_path, resume_csv=csv_path)
+
+        # Should have 3 total: 2 from CSV + 1 new
+        assert len(rows) == 3
+        file_names = [r["file_name"] for r in rows]
+        assert "img_000.jpg" in file_names
+        assert "img_001.jpg" in file_names
+        assert "img_002.jpg" in file_names
+
+    def test_no_resume_csv_processes_all(self, tmp_path):
+        self._make_images(tmp_path, 2)
+
+        mock_model = MagicMock()
+        mock_model.model = "medgemma1.5:4b"
+        mock_response = MagicMock()
+        mock_response.models = [mock_model]
+
+        with patch("ollama.list", return_value=mock_response):
+            with patch("ollama.chat", return_value=MOCK_RESPONSE):
+                rows = extract_folder(tmp_path)
+
+        assert len(rows) == 2

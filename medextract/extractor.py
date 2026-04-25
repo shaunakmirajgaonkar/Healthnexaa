@@ -13,7 +13,9 @@ from io import BytesIO
 from pathlib import Path
 
 import ollama
+import pandas as pd
 from PIL import Image, UnidentifiedImageError
+from tqdm import tqdm
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 log = logging.getLogger(__name__)
@@ -148,12 +150,22 @@ def extract_folder(
     workers: int = 3,
     image_size: int = 512,
     max_retries: int = 3,
+    resume_csv: str | Path | None = None,
 ) -> list[dict]:
     """Process every supported image in `folder` and return a list of result dicts.
 
     Each dict contains the extracted BP fields plus:
       - bp_classification: AHA category string
       - extracted_at: timestamp string (YYYY-MM-DD HH:MM:SS)
+
+    Args:
+        folder:      Path to folder containing images.
+        model:       Ollama model name.
+        workers:     Number of parallel workers (increase on M2/M3 chips).
+        image_size:  Max image dimension before encoding (larger = more accurate, slower).
+        max_retries: Max retry attempts per image on parse/network failure.
+        resume_csv:  Path to an existing CSV output file. Images already listed in it
+                     are skipped — allows resuming a crashed batch without reprocessing.
 
     Raises RuntimeError if Ollama is not running or the model is not pulled.
     Raises FileNotFoundError if the folder does not exist.
@@ -165,44 +177,61 @@ def extract_folder(
     if not folder.exists():
         raise FileNotFoundError(f"Folder not found: {folder}")
 
-    images = sorted(f for f in folder.iterdir() if f.suffix.lower() in EXTENSIONS)
-    if not images:
+    all_images = sorted(f for f in folder.iterdir() if f.suffix.lower() in EXTENSIONS)
+    if not all_images:
         log.warning("No images found in %s", folder)
         return []
 
-    log.info("Found %d image(s) in %s", len(images), folder)
+    # Resume: skip images already present in an existing CSV
+    already_done: set[str] = set()
+    existing_rows: list[dict] = []
+    if resume_csv is not None:
+        resume_path = Path(resume_csv)
+        if resume_path.exists():
+            existing_df = pd.read_csv(resume_path)
+            already_done = set(existing_df["file_name"].tolist())
+            existing_rows = existing_df.to_dict("records")
+            log.info("Resuming — skipping %d already-processed images", len(already_done))
+
+    images = [f for f in all_images if f.name not in already_done]
+
+    log.info(
+        "Found %d image(s) total — %d to process, %d already done",
+        len(all_images), len(images), len(already_done),
+    )
+
+    if not images:
+        log.info("All images already processed. Nothing to do.")
+        return existing_rows
 
     results: dict[int, dict] = {}
 
     def _process(args):
         idx, path = args
-        log.info("Processing [%d]: %s", idx + 1, path.name)
         result = analyze_image(path, model=model, image_size=image_size, max_retries=max_retries)
         return idx, result
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_process, (i, img)): i for i, img in enumerate(images)}
-        for future in as_completed(futures):
-            idx, result = future.result()
-            if result:
-                warnings = validate_bp(result)
-                if warnings:
-                    log.warning("[%s] Validation: %s", result.get("file_name"), "; ".join(warnings))
-                result["bp_classification"] = classify_bp(
-                    result.get("systolic", 0), result.get("diastolic", 0)
-                )
-                result["extracted_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                log.info(
-                    "Done [%s]: BP %s/%s  Pulse %s  Confidence %s/10  [%s]",
-                    result.get("file_name"),
-                    result.get("systolic"),
-                    result.get("diastolic"),
-                    result.get("pulse"),
-                    result.get("confidence"),
-                    result.get("bp_classification"),
-                )
-                results[idx] = result
-            else:
-                log.error("Failed: %s", images[idx].name)
+        with tqdm(total=len(images), unit="img", desc="Extracting") as pbar:
+            for future in as_completed(futures):
+                idx, result = future.result()
+                if result:
+                    warnings = validate_bp(result)
+                    if warnings:
+                        log.warning("[%s] Validation: %s", result.get("file_name"), "; ".join(warnings))
+                    result["bp_classification"] = classify_bp(
+                        result.get("systolic", 0), result.get("diastolic", 0)
+                    )
+                    result["extracted_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    results[idx] = result
+                    pbar.set_postfix(
+                        file=result.get("file_name", "")[:25],
+                        bp=f"{result.get('systolic')}/{result.get('diastolic')}",
+                    )
+                else:
+                    log.error("Failed: %s", images[idx].name)
+                pbar.update(1)
 
-    return [results[i] for i in sorted(results)]
+    new_rows = [results[i] for i in sorted(results)]
+    return existing_rows + new_rows

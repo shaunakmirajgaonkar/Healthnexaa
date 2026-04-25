@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--workers", type=int, default=3, help="Parallel workers (default: 3)")
     parser.add_argument("--image-size", type=int, default=512, help="Max image dimension in pixels (default: 512)")
     parser.add_argument("--max-retries", type=int, default=3, help="Max retries per image (default: 3)")
+    parser.add_argument("--resume", action="store_true", help="Skip images already in the output CSV and append new results")
     args = parser.parse_args()
 
     try:
@@ -43,6 +44,7 @@ def main():
             workers=args.workers,
             image_size=args.image_size,
             max_retries=args.max_retries,
+            resume_csv=args.output if args.resume else None,
         )
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)

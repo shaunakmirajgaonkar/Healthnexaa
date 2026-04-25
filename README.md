@@ -86,10 +86,32 @@ rows = extract_folder("/path/to/photos")
 pd.DataFrame(rows).to_csv("results.csv", index=False)
 ```
 
+### 1000+ images — progress bar and resume
+
+```python
+from medextract import extract_folder
+
+# tqdm progress bar shown automatically
+rows = extract_folder("/path/to/1000-photos", workers=5)
+```
+
+If the run crashes midway, resume without reprocessing done images:
+
+```python
+rows = extract_folder(
+    "/path/to/photos",
+    resume_csv="results.csv",  # skips files already in this CSV
+)
+```
+
 ### CLI
 
 ```bash
+# Basic
 python3 -m medextract.cli /path/to/photos --output results.csv --workers 4
+
+# Resume a crashed run
+python3 -m medextract.cli /path/to/photos --output results.csv --resume
 ```
 
 ---
