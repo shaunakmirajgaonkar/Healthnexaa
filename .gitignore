@@ -6,3 +6,5 @@ medextract.egg-info/
 .pytest_cache/
 *.csv
 .env
+dist/
+build/
