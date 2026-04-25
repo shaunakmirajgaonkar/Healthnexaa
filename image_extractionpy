@@ -23,9 +23,9 @@ import ollama
 # ==========================================
 # Configuration
 # ==========================================
-IMAGE_FOLDER = Path(os.getenv("IMAGE_FOLDER", '/Users/shaunak/Desktop/BP MONITOR APPRATUS IMAGES/bp monitor_images'))
-OUTPUT_CSV   = Path.home() / "Desktop" / "medical device data new.csv"
-FAILED_LOG   = Path.home() / "Desktop" / "failed_images.txt"
+IMAGE_FOLDER = Path(os.getenv("IMAGE_FOLDER", "./images"))
+OUTPUT_CSV   = Path(os.getenv("OUTPUT_CSV", "medical_data_export.csv"))
+FAILED_LOG   = Path(os.getenv("FAILED_LOG", "failed_images.txt"))
 MODEL        = "medgemma1.5:4b"
 WORKERS      = 3   # parallel images at once — increase to 4-5 on Apple Silicon M2/M3
 IMAGE_SIZE   = 512  # smaller = faster; increase to 768 if accuracy suffers

@@ -18,7 +18,7 @@ import google.generativeai as genai
 # Configuration — edit these two lines
 # ==========================================
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY")
-IMAGE_FOLDER   = Path(os.getenv("IMAGE_FOLDER", "/Users/shaunak/Desktop"))
+IMAGE_FOLDER   = Path(os.getenv("IMAGE_FOLDER", "./images"))
 OUTPUT_CSV     = "medical_data_export.csv"
 FAILED_LOG     = "failed_images.txt"
 
