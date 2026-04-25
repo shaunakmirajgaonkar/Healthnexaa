@@ -1,18 +1,18 @@
-!pip install openai
+!pip install google-generativeai pillow pandas
 import io
 import time
 import json
-import base64
 import pandas as pd
 from pathlib import Path
 from PIL import Image, UnidentifiedImageError
-from openai import OpenAI
+import google.generativeai as genai
 
 # ==========================================
 # 1. Configuration
 # ==========================================
-API_KEY = "YOUR API KEY"  # paste your OpenAI key here, never in chat
-client = OpenAI(api_key=API_KEY)
+API_KEY = "YOUR_GEMINI_API_KEY"  # get free key at aistudio.google.com
+genai.configure(api_key=API_KEY)
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 IMAGE_FOLDER_PATH = Path('/Users/shaunak/Desktop/untitled folder 3')
 
@@ -22,51 +22,39 @@ IMAGE_FOLDER_PATH = Path('/Users/shaunak/Desktop/untitled folder 3')
 def analyze_screen(image_path: Path, max_retries=5):
     try:
         img = Image.open(image_path)
-
-        # Resize to max 1024px
         img.thumbnail((1024, 1024), Image.LANCZOS)
         if img.mode != 'RGB':
             img = img.convert('RGB')
-
-        # Save to buffer and encode as base64
-        buffer = io.BytesIO()
-        img.save(buffer, format='JPEG', quality=90)
-        b64 = base64.b64encode(buffer.getvalue()).decode()
         print(f"   📐 Resized to {img.size}")
-
     except (UnidentifiedImageError, Exception) as e:
         print(f"⏭️ Skipping {image_path.name}: unreadable image ({e})")
         return None
 
-    prompt = """Analyze this blood pressure monitor image and extract values.
+    prompt = """Analyze this blood pressure monitor image and extract all visible values.
 Return ONLY a valid JSON object with exactly these keys:
 {
   "systolic": <int, 0 if unreadable>,
   "diastolic": <int, 0 if unreadable>,
   "pulse": <int, 0 if unreadable>,
   "brand": "<string, 'Unknown' if not visible>",
-  "has_glare": <true or false>
+  "date": "<YYYY-MM-DD or null>",
+  "time": "<HH:MM or null>",
+  "memory_slot": "<M1, M2, or null>",
+  "ihb": <true if irregular heartbeat symbol shown, else false>,
+  "afib": <true if afib indicator shown, else false>,
+  "error_code": "<string like E1-E5, or null>",
+  "user": "<User 1, User 2, or null>",
+  "battery_low": <true if battery low indicator shown, else false>,
+  "has_glare": <true or false>,
+  "confidence": <int 1-10, your confidence in the reading>
 }
 No extra text, no markdown, just the JSON."""
 
     attempt = 0
     while attempt < max_retries:
         try:
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {
-                            "url": f"data:image/jpeg;base64,{b64}"
-                        }}
-                    ]
-                }],
-                temperature=0.0,
-                max_tokens=200
-            )
-            raw = response.choices[0].message.content.strip()
+            response = model.generate_content([prompt, img])
+            raw = response.text.strip()
             raw = raw.replace("```json", "").replace("```", "").strip()
             data = json.loads(raw)
             data["file_name"] = image_path.name
@@ -93,7 +81,7 @@ def main():
     images = [f for f in IMAGE_FOLDER_PATH.iterdir() if f.suffix.lower() in extensions]
 
     print(f"🔍 Found {len(images)} images. Starting extraction...")
-    print(f"⏱️ Estimated time: ~{len(images) * 3 // 60}m {len(images) * 3 % 60}s\n")
+    print(f"⏱️ Estimated time: ~{len(images) * 4 // 60}m {len(images) * 4 % 60}s\n")
 
     extracted_rows = []
     skipped = 0
@@ -104,13 +92,13 @@ def main():
 
         if row_data is not None:
             extracted_rows.append(row_data)
-            print(f"✅ Done: BP {row_data.get('systolic')}/{row_data.get('diastolic')}, Pulse {row_data.get('pulse')}")
+            print(f"✅ Done: BP {row_data.get('systolic')}/{row_data.get('diastolic')}, Pulse {row_data.get('pulse')}, Confidence {row_data.get('confidence')}/10")
         else:
             skipped += 1
 
         if i < len(images):
-            print(f"⏳ Waiting 3s...\n")
-            time.sleep(3)
+            print(f"⏳ Waiting 4s...\n")
+            time.sleep(4)  # stay under 15 requests/min free tier limit
 
     print(f"\n✅ Extraction complete. {len(extracted_rows)} succeeded, {skipped} skipped.")
 
@@ -119,14 +107,17 @@ def main():
         return
 
     df = pd.DataFrame(extracted_rows)
-    cols = ['file_name'] + [c for c in df.columns if c != 'file_name']
-    df = df[cols]
+    col_order = ['file_name', 'systolic', 'diastolic', 'pulse', 'brand', 'date', 'time',
+                 'memory_slot', 'ihb', 'afib', 'error_code', 'user', 'battery_low',
+                 'has_glare', 'confidence']
+    existing_cols = [c for c in col_order if c in df.columns]
+    df = df[existing_cols]
 
     csv_path = "medical_data_export.csv"
     df.to_csv(csv_path, index=False)
 
-    display(df)
-    print(f"📊 Table saved as: {csv_path}")
+    print(df.to_string(index=False))
+    print(f"\n📊 Table saved as: {csv_path}")
 
 if __name__ == "__main__":
     main()

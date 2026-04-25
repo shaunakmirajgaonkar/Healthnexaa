@@ -1,0 +1,234 @@
+"""
+BP Monitor Image Extraction — 100% Local, No API Key Required
+Uses Ollama + MedGemma 1.5 4b with parallel processing for speed.
+
+Run:
+  pip install ollama pillow pandas
+  python image_extractionpy
+"""
+
+import os
+import time
+import json
+import logging
+import base64
+import pandas as pd
+from io import BytesIO
+from pathlib import Path
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from PIL import Image, UnidentifiedImageError
+import ollama
+
+# ==========================================
+# Configuration
+# ==========================================
+IMAGE_FOLDER = Path(os.getenv("IMAGE_FOLDER", '/Users/shaunak/Desktop/BP MONITOR APPRATUS IMAGES/bp monitor_images'))
+OUTPUT_CSV   = Path.home() / "Desktop" / "medical device data new.csv"
+FAILED_LOG   = Path.home() / "Desktop" / "failed_images.txt"
+MODEL        = "medgemma1.5:4b"
+WORKERS      = 3   # parallel images at once — increase to 4-5 on Apple Silicon M2/M3
+IMAGE_SIZE   = 512  # smaller = faster; increase to 768 if accuracy suffers
+
+# ==========================================
+# Setup
+# ==========================================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)s  %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
+
+PROMPT = """You are a medical device reader. Analyze this blood pressure monitor image and extract every visible value.
+Return ONLY a valid JSON object — no markdown, no extra text, nothing else:
+{
+  "systolic":    <int, 0 if unreadable>,
+  "diastolic":   <int, 0 if unreadable>,
+  "pulse":       <int, 0 if unreadable>,
+  "brand":       "<string, Unknown if not visible>",
+  "date":        "<YYYY-MM-DD or null>",
+  "time":        "<HH:MM or null>",
+  "memory_slot": "<M1, M2, or null>",
+  "ihb":         <true if irregular heartbeat symbol shown, else false>,
+  "afib":        <true if afib indicator shown, else false>,
+  "error_code":  "<E1-E5 string or null>",
+  "user":        "<User 1, User 2, or null>",
+  "battery_low": <true if battery warning shown, else false>,
+  "has_glare":   <true if glare affects readability, else false>,
+  "confidence":  <int 1-10, your confidence in the reading>
+}"""
+
+COLUMN_ORDER = [
+    "file_name", "systolic", "diastolic", "pulse", "brand",
+    "date", "time", "memory_slot", "ihb", "afib",
+    "error_code", "user", "battery_low", "has_glare", "confidence",
+    "bp_classification", "extracted_at",
+]
+
+EXTENSIONS  = {".png", ".jpg", ".jpeg", ".webp"}
+MAX_RETRIES = 3
+
+
+# ==========================================
+# Core extraction
+# ==========================================
+def load_image_b64(image_path: Path) -> str | None:
+    try:
+        img = Image.open(image_path)
+        img.thumbnail((IMAGE_SIZE, IMAGE_SIZE), Image.LANCZOS)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return base64.b64encode(buf.getvalue()).decode()
+    except (UnidentifiedImageError, Exception) as e:
+        log.warning("Cannot open %s: %s", image_path.name, e)
+        return None
+
+
+def analyze_screen(image_path: Path) -> dict | None:
+    b64 = load_image_b64(image_path)
+    if b64 is None:
+        return None
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = ollama.chat(
+                model=MODEL,
+                messages=[{
+                    "role": "user",
+                    "content": PROMPT,
+                    "images": [b64],
+                }]
+            )
+            raw = response["message"]["content"].strip()
+            raw = raw.replace("```json", "").replace("```", "").strip()
+
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            if start == -1 or end == 0:
+                raise ValueError("No JSON found in response")
+            data = json.loads(raw[start:end])
+            data["file_name"] = image_path.name
+            return data
+
+        except Exception as e:
+            log.warning("Attempt %d/%d failed for %s: %s", attempt, MAX_RETRIES, image_path.name, e)
+            if attempt < MAX_RETRIES:
+                time.sleep(2)
+
+    log.error("Skipping %s: all retries exhausted.", image_path.name)
+    return None
+
+
+def process_image(args: tuple) -> tuple[int, dict | None]:
+    index, img_path = args
+    log.info("Processing [%d]: %s", index, img_path.name)
+    result = analyze_screen(img_path)
+    return index, result
+
+
+def validate_bp(row: dict) -> list[str]:
+    warnings = []
+    s, d, p = row.get("systolic", 0), row.get("diastolic", 0), row.get("pulse", 0)
+    if s and not (60 <= s <= 300):
+        warnings.append(f"systolic {s} out of range")
+    if d and not (30 <= d <= 200):
+        warnings.append(f"diastolic {d} out of range")
+    if p and not (30 <= p <= 250):
+        warnings.append(f"pulse {p} out of range")
+    if s and d and s <= d:
+        warnings.append("systolic must be greater than diastolic")
+    return warnings
+
+
+def classify_bp(systolic: int, diastolic: int) -> str:
+    if systolic > 180 or diastolic > 120:
+        return "HYPERTENSIVE CRISIS"
+    elif systolic >= 140 or diastolic >= 90:
+        return "Stage 2 Hypertension"
+    elif systolic >= 130 or diastolic >= 80:
+        return "Stage 1 Hypertension"
+    elif systolic >= 120 and diastolic < 80:
+        return "Elevated"
+    elif systolic > 0:
+        return "Normal"
+    return "Unknown"
+
+
+# ==========================================
+# Main
+# ==========================================
+def main():
+    try:
+        ollama.list()
+    except Exception:
+        log.error("Ollama is not running. Start it with: ollama serve")
+        return
+
+    if not IMAGE_FOLDER.exists():
+        log.error("Folder not found: %s", IMAGE_FOLDER)
+        return
+
+    images = sorted([f for f in IMAGE_FOLDER.iterdir() if f.suffix.lower() in EXTENSIONS])
+    if not images:
+        log.error("No images found in %s", IMAGE_FOLDER)
+        return
+
+    log.info("Model  : %s (local, no API key)", MODEL)
+    log.info("Workers: %d parallel", WORKERS)
+    log.info("Found  : %d image(s) in %s\n", len(images), IMAGE_FOLDER)
+
+    start_time = time.time()
+    results_map = {}
+    failed = []
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+        futures = {
+            executor.submit(process_image, (i, img)): i
+            for i, img in enumerate(images)
+        }
+        for future in as_completed(futures):
+            index, result = future.result()
+            img_path = images[index]
+            if result:
+                warnings = validate_bp(result)
+                result["bp_classification"] = classify_bp(result.get("systolic", 0), result.get("diastolic", 0))
+                result["extracted_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                if warnings:
+                    log.warning("  [%s] Validation: %s", img_path.name, "; ".join(warnings))
+                log.info("  Done [%s]: BP %s/%s  Pulse %s  Confidence %s/10  [%s]",
+                         img_path.name,
+                         result.get("systolic"), result.get("diastolic"),
+                         result.get("pulse"), result.get("confidence"),
+                         result.get("bp_classification"))
+                results_map[index] = result
+            else:
+                failed.append(img_path.name)
+
+    elapsed = time.time() - start_time
+    extracted = [results_map[i] for i in sorted(results_map)]
+
+    log.info("\nExtraction complete: %d succeeded, %d failed in %.1fs (%.1fs/image)",
+             len(extracted), len(failed), elapsed, elapsed / len(images) if images else 0)
+
+    if failed:
+        Path(FAILED_LOG).write_text("\n".join(failed))
+        log.warning("Failed images logged to: %s", FAILED_LOG)
+
+    if not extracted:
+        log.warning("No data extracted. CSV not saved.")
+        return
+
+    df = pd.DataFrame(extracted)
+    final_cols = [c for c in COLUMN_ORDER if c in df.columns]
+    df = df[final_cols]
+
+    df.to_csv(OUTPUT_CSV, index=False)
+    log.info("Saved to: %s\n", OUTPUT_CSV)
+    print(df.to_string(index=False))
+
+
+if __name__ == "__main__":
+    main()
