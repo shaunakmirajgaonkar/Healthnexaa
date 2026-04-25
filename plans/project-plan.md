@@ -1,34 +1,44 @@
 # Healthnexaa — Project Plan
 
-## What It Is
-
-A Python library (`medextract`) that reads blood pressure monitor photos using a local LLM (Ollama + MedGemma), extracts all visible readings, and returns structured data ready for CSV export or direct use in Python code.
+**Current version:** 0.3.0 | **Status:** Production Ready ✅
 
 ---
 
-## Current State — COMPLETED ✅
+## What It Is
 
-**Library:** `medextract/` (installed via `pip install -e .`)
+A fully installable Python library (`medextract`) that extracts blood pressure readings from medical device photos using a local AI model (Ollama + MedGemma). No API key, no internet connection, no cost. Works as a Python import or CLI command.
 
-**Files created:**
+---
+
+## Current State — All Phases Complete
+
+**Library:** `medextract/` (installed via `pip install -e .` or from GitHub)
 
 | File | Purpose |
 |---|---|
-| `medextract/__init__.py` | Public API — exports 4 functions |
-| `medextract/extractor.py` | Core logic — no global state |
-| `medextract/cli.py` | CLI entry point (`python3 -m medextract.cli`) |
-| `pyproject.toml` | Package config — installable via pip |
+| `medextract/__init__.py` | Public API — 5 exported functions |
+| `medextract/extractor.py` | Core logic — no global state, input validation, resume, progress bar |
+| `medextract/cli.py` | CLI entry point with `--resume` flag |
+| `pyproject.toml` | Package config — pinned deps, dev group, CLI entry |
+| `.github/workflows/tests.yml` | CI — auto-runs 37 tests on every push across Python 3.10/3.11/3.12 |
+| `tests/test_extractor.py` | 37 tests — all functions fully covered, Ollama mocked |
 
-**What it does today:**
-1. Accepts a folder path, model name, worker count, image size, and retry count as parameters
-2. Resizes each image to configurable max size (default 512px) and converts to JPEG
-3. Base64-encodes and sends to Ollama (local, no API key, no cost, no rate limits)
-4. Parses structured JSON response with 14 fields per image
-5. Retries up to N times on parse/connection failure
-6. Processes images in parallel via `ThreadPoolExecutor`
-7. Returns a list of dicts — caller controls what to do with the data (CSV, DB, print, etc.)
+**What it does:**
+1. Validates parameters before processing (`ValueError` with clear message)
+2. Checks Ollama is running and model is pulled (`RuntimeError` with fix instructions)
+3. Resizes each image to configurable max size, converts to JPEG
+4. Base64-encodes and sends to Ollama (local — no data leaves the machine)
+5. Parses structured JSON response with 14 fields per image
+6. Clamps confidence to 1–10 regardless of model output
+7. Retries on failure with configurable max retries
+8. Processes images in parallel via `ThreadPoolExecutor`
+9. Shows tqdm progress bar with live BP readout and ETA
+10. Supports resume — skips images already in an existing CSV
+11. Returns list of dicts — caller controls output (CSV, DB, print, etc.)
 
-**Extracted fields per image (14 fields):**
+---
+
+## Extracted Fields (14 fields per image)
 
 | Field | Type | Fallback |
 |---|---|---|
@@ -46,9 +56,38 @@ A Python library (`medextract`) that reads blood pressure monitor photos using a
 | `user` | string | `null` |
 | `battery_low` | bool | `false` |
 | `has_glare` | bool | `false` |
-| `confidence` | int 1–10 | — |
+| `confidence` | int 1–10 | clamped |
 | `bp_classification` | string | `"Unknown"` |
 | `extracted_at` | string | — |
+
+---
+
+## Phase History
+
+### Phase 1 — Initial Script ✅
+- Single-file Gemini API script extracting 5 fields
+- Manual config, no retry, no logging
+
+### Phase 2 — Local Model + Hardening ✅
+- Switched to Ollama + MedGemma (no API key, no cost, no rate limits)
+- 14-field extraction, parallel processing, retry logic, BP classification, validation
+
+### Phase 3 — Python Library ✅
+- Converted to installable `medextract` package
+- Clean public API, no global state, NullHandler logging, CLI entry point
+- Verified on real Omron and Meditech BP-12 images
+
+### Phase 4 — Production Ready ✅ (2026-04-25)
+- 37 pytest tests — all passing, Ollama fully mocked
+- `check_ollama()` — friendly error if Ollama not running or model not pulled
+- Confidence clamped to 1–10 in all cases
+- Pinned dependency versions
+- Old scripts moved to `examples/`
+- GitHub Actions CI across Python 3.10, 3.11, 3.12
+- Input validation with clear `ValueError` messages
+- tqdm progress bar with live readout
+- Resume support (`resume_csv`) for large batches
+- Version consistent across `pyproject.toml` and `__init__.py`
 
 ---
 
@@ -56,40 +95,20 @@ A Python library (`medextract`) that reads blood pressure monitor photos using a
 
 | Test | Result |
 |---|---|
-| `import medextract` | PASS — version 0.1.0 |
-| `classify_bp` — 6 AHA categories | PASS (6/6) |
-| `validate_bp` — boundary and inversion checks | PASS (3/3) |
-| Image load + base64 encode | PASS (46288 chars, ~34 KB) |
-| `analyze_image` on real Omron photo | PASS — BP 140/80, Pulse 70, Confidence 10/10 |
-| `analyze_image` on Meditech BP-12 photo | PASS — BP 130/80, Pulse 76, Brand MEDITECH, Confidence 10/10 |
-| `extract_folder` on 178 real images | PASS — all queued and processed, no crashes |
+| 37 pytest tests | ALL PASS |
+| Live extraction — Meditech BP-12 | BP 130/80, Pulse 76, Confidence 10/10 |
+| Live extraction — Omron | BP 140/80, Pulse 70, Confidence 10/10 |
+| 178-image folder batch | All processed, no crashes |
+| CI (GitHub Actions) | Passing on Python 3.10, 3.11, 3.12 |
 
 ---
-
-## Phase 3 — Production Hardening ✅ COMPLETED (2026-04-25)
-
-- ~~Write a formal test suite~~ → Done — 31 pytest tests, all passing, Ollama fully mocked
-- ~~Pin dependency versions~~ → Done (`ollama>=0.6.1`, `pillow>=10.2.0`, `pandas>=2.1.1`)
-- ~~Add Ollama not-running check~~ → Done — `check_ollama()` raises clear `RuntimeError`
-- ~~Cap confidence to 1–10~~ → Done — clamped in `analyze_image()` after parsing
-- ~~Clean up repo root~~ → Done — old scripts moved to `examples/` with README
-
-## Phase 4 — Production Ready ✅ COMPLETED (2026-04-25)
-
-- ~~Fix version mismatch~~ → `pyproject.toml` and `__init__.py` both now report `0.3.0`
-- ~~Add GitHub Actions CI~~ → Tests run on every push/PR across Python 3.10, 3.11, 3.12
-- ~~Add input validation~~ → `ValueError` raised for invalid `workers`, `image_size`, `max_retries`
-- ~~37 tests passing~~ → Added 4 new validation tests
 
 ## Remaining Next Steps
 
 | Priority | Task |
 |---|---|
-| Medium | Publish to PyPI so others can `pip install medextract` |
+| Medium | Publish to PyPI — `pip install medextract` |
 | Medium | Add glucometer support (`analyze_glucose_image()`) |
-| Low | Add a `--dry-run` flag to validate images without calling Ollama |
-| Low | Build a FastAPI web dashboard for drag-and-drop upload + trend charts |
-
----
-
-**Summary:** The project has been converted from a single-file script into a fully installable Python library. Anyone can now `pip install` it and call `extract_folder()` or `analyze_image()` directly in their own code, or use the CLI. Tested end-to-end on real BP monitor images with confirmed correct readings.
+| Low | Add `--dry-run` flag to validate images without calling Ollama |
+| Low | Build FastAPI web dashboard for drag-and-drop upload + trend charts |
+| Low | Add Docker config for server deployment |

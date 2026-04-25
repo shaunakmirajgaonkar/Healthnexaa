@@ -27,7 +27,7 @@ This is harder than general OCR because:
 | Wrist automatic | Smaller LCD | Omron, Andes |
 | Manual (sphygmomanometer) | Analog dial | Welch Allyn |
 
-**Fields on screen (full extraction schema):**
+**Fields on screen (full extraction schema — 14 fields):**
 
 ```json
 {
@@ -89,12 +89,49 @@ This is harder than general OCR because:
 
 ---
 
-### Approach 1: LLM Vision API (Gemini / GPT-4o / Claude) ⭐ Current Approach
+### Approach 1: Local LLM (Ollama + MedGemma) ⭐ Current Approach
 
 **How it works:**
-Send the image to a multimodal LLM with a prompt asking it to read the display and return structured JSON.
+Send the image to a local vision model via Ollama with a prompt asking it to read the display and return structured JSON. No data leaves the machine.
 
-**Current implementation uses Gemini 1.5 Flash (free tier)** — 15 requests/min, 1,500/day, no credit card required. Get a key at [aistudio.google.com](https://aistudio.google.com).
+**Current implementation uses `medgemma1.5:4b`** — a medical vision model optimized for reading clinical images including device displays. Free to run, no API key, no rate limits.
+
+```python
+from medextract import extract_folder
+
+rows = extract_folder("/path/to/bp-photos", workers=5)
+for row in rows:
+    print(row["systolic"], "/", row["diastolic"], "—", row["bp_classification"])
+```
+
+**Prerequisites:**
+```bash
+ollama serve
+ollama pull medgemma1.5:4b
+pip install git+https://github.com/shaunakmirajgaonkar/Healthnexaa.git
+```
+
+**Pros:**
+- No data leaves the machine — HIPAA-friendly
+- No API key, no cost, no rate limits
+- Works on any device, any angle, any lighting
+- Extracts all 14 fields in one call
+- Understands symbols (IHB, AFib, error codes)
+- Confidence clamped to 1–10 for consistent output
+
+**Cons:**
+- Requires Ollama (3.3 GB model download, one-time)
+- Slower than local OCR (~11 sec/image on Apple Silicon)
+- Occasional hallucinations on very blurry or glare-heavy images
+
+**Best for:** The current `medextract` library — local, private, free, production-ready
+
+---
+
+### Approach 2: Cloud LLM Vision API (Gemini / GPT-4o / Claude)
+
+**How it works:**
+Send the image to a multimodal LLM API with a structured prompt. Works the same as the local approach but images go to a third-party server.
 
 ```python
 import google.generativeai as genai
@@ -107,47 +144,23 @@ img = Image.open("bp_reading.jpg")
 response = model.generate_content([prompt, img])
 ```
 
-**Full extraction prompt (14 fields):**
-```python
-prompt = """Read this BP monitor display. Return ONLY JSON:
-{
-  "systolic": int,
-  "diastolic": int,
-  "pulse": int,
-  "brand": string,
-  "date": "YYYY-MM-DD or null",
-  "time": "HH:MM or null",
-  "memory_slot": "M1, M2, or null",
-  "ihb": bool,
-  "afib": bool,
-  "error_code": "string or null",
-  "user": "User 1, User 2, or null",
-  "battery_low": bool,
-  "has_glare": bool,
-  "confidence": int  # 1-10
-}"""
-```
-
 **Pros:**
 - Works on almost any device, any angle, any lighting
 - Zero training data needed
 - Handles glare, rotation, partial occlusion
-- Extracts ALL fields in one call (14 fields)
-- Understands context, symbols, and error codes
-- **Free tier available (Gemini 1.5 Flash)**
+- Extracts ALL fields in one call
 
 **Cons:**
-- Free tier has rate limits (15 RPM, 1,500/day)
-- Data goes to third-party servers (privacy concern)
-- Slower than local methods (~1–3 seconds/image)
-- Occasional hallucinations (makes up numbers)
-- Needs internet
+- Images sent to third-party servers (privacy concern for PHI)
+- Free tiers have rate limits (Gemini: 15 RPM, 1,500/day)
+- Needs internet connection
+- API cost at scale (Gemini Flash: ~$0.00035/image, GPT-4o: ~$0.01/image)
 
-**Best for:** Rapid prototyping, free usage, maximum field extraction with zero setup
+**Best for:** Rapid prototyping or use cases where local compute is unavailable
 
 ---
 
-### Approach 2: Traditional OCR (Tesseract / Cloud OCR)
+### Approach 3: Traditional OCR (Tesseract / Cloud OCR)
 
 **How it works:**
 Pre-process the image to isolate the digit region, then run an OCR engine to read the characters.
@@ -166,12 +179,6 @@ text = pytesseract.image_to_string(
 )
 ```
 
-**Cloud OCR options:**
-- Google Cloud Vision API
-- AWS Textract
-- Azure Computer Vision
-- Microsoft Read API
-
 **Pros:**
 - Free (Tesseract) or cheap (cloud OCR)
 - Fast (sub-100ms locally)
@@ -189,7 +196,7 @@ text = pytesseract.image_to_string(
 
 ---
 
-### Approach 3: Custom Trained Deep Learning (CNN + Object Detection)
+### Approach 4: Custom Trained Deep Learning (CNN + Object Detection)
 
 **How it works:**
 Two-stage pipeline:
@@ -199,12 +206,6 @@ Two-stage pipeline:
 ```
 Photo → YOLO (detect display) → Crop → Digit Segmenter → Classifier per digit → Value
 ```
-
-**Tools:**
-- YOLOv8 (Ultralytics) for detection
-- Custom CNN for digit classification
-- CRNN (CNN + RNN) for sequence reading
-- TrOCR (Microsoft) — transformer OCR, fine-tuneable
 
 **Training data needed:**
 - 500–2000 labeled images minimum
@@ -228,7 +229,7 @@ Photo → YOLO (detect display) → Crop → Digit Segmenter → Classifier per 
 
 ---
 
-### Approach 4: Hybrid Pipeline (Recommended for Production)
+### Approach 5: Hybrid Pipeline (Recommended for Future Scale)
 
 **How it works:**
 Combine approaches based on confidence:
@@ -238,7 +239,7 @@ Image
   → Pre-processing (denoise, deskew, enhance)
   → OCR attempt (fast, cheap)
     → if confidence > threshold → accept result
-    → if confidence low → send to GPT-4o (expensive, accurate)
+    → if confidence low → send to local LLM (accurate)
   → Post-processing (validate ranges, flag outliers)
   → Store result
 ```
@@ -250,16 +251,16 @@ def extract(image):
     if result.confidence > 0.85 and result.in_valid_range():
         return result
     else:
-        return gpt4o_extract(image)  # fallback
+        return llm_extract(image)  # fallback
 ```
 
-This gives you speed and cost efficiency for clean images, accuracy for hard ones.
+This gives speed and cost efficiency for clean images, accuracy for hard ones.
 
-**Best for:** Production systems at medium-to-large scale
+**Best for:** Production systems at medium-to-large scale where throughput matters
 
 ---
 
-### Approach 5: Specialized Medical / Device APIs
+### Approach 6: Specialized Medical / Device APIs
 
 Companies building specifically for medical device data:
 
@@ -277,7 +278,7 @@ Companies building specifically for medical device data:
 
 ---
 
-### Approach 6: On-Device Mobile Processing
+### Approach 7: On-Device Mobile Processing
 
 **How it works:**
 Process the image directly on the user's phone before it ever leaves:
@@ -372,11 +373,6 @@ def preprocess(image_path):
     l = clahe.apply(l)
     cv_img = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
 
-    # Detect display region via contour detection
-    gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 50, 150)
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
     return cv_img
 ```
 
@@ -397,8 +393,6 @@ def validate_bp(systolic, diastolic, pulse):
         errors.append(f"Pulse {pulse} out of physiological range")
     if systolic <= diastolic:
         errors.append("Systolic must be greater than diastolic")
-    if (systolic - diastolic) < 10:
-        errors.append("Pulse pressure suspiciously narrow")
     return errors
 
 def validate_glucose(value, unit):
@@ -472,19 +466,19 @@ glucose_prompt = """Read this glucometer display. Return ONLY JSON:
 
 ## 7. Full System Architecture Options
 
-### Option A — Simple Script (Current)
+### Option A — Python Library (Current — Production Ready ✅)
 ```
-Local images → Python script → CSV
+Local images → medextract library → list of dicts → CSV / DB / print
 ```
-Good for: Personal use, one-time batch jobs
+Good for: Any Python project, batch processing, research
 
-### Option B — CLI Tool
+### Option B — CLI Tool (Current — Production Ready ✅)
 ```
-python extract.py --device bp --folder ./images --output readings.csv
+python3 -m medextract.cli /path/to/photos --output results.csv
 ```
-Good for: Regular personal use, sharing with non-developers
+Good for: Regular personal use, sharing with non-developers, automation scripts
 
-### Option C — Local Web App
+### Option C — Local Web App (Planned)
 ```
 Browser → FastAPI → Processing → SQLite → Chart Dashboard
 ```
@@ -514,9 +508,9 @@ Good for: Maximum ease of use, no app installation required
 
 | Layer | Recommended | Alternative |
 |---|---|---|
+| Extraction | Ollama + MedGemma (local, current) | Gemini Flash (cloud, fast) |
 | Backend | FastAPI (Python) | Flask, Django |
 | Database | PostgreSQL | SQLite (small scale), MongoDB |
-| Vision AI | Gemini 1.5 Flash (primary) + GPT-4o (fallback) | Claude 3.5 Sonnet |
 | Image processing | Pillow + OpenCV | scikit-image |
 | Task queue | Celery + Redis | RQ (simple) |
 | Frontend | React + Recharts | Streamlit (quick) |
@@ -534,36 +528,35 @@ Medical image data is sensitive. Key concerns and mitigations:
 | Risk | Mitigation |
 |---|---|
 | API key in source code | Move to `.env` file, never commit to git |
-| Patient images sent to OpenAI | Review data retention policy; use local models for PHI |
+| Patient images sent to external servers | Use local Ollama model — no data leaves machine |
 | CSV stored in plaintext | Encrypt at rest, restrict file permissions |
 | No auth on web app | Add authentication before any web deployment |
-| HIPAA compliance (US) | Requires BAA with OpenAI, audit logging, access controls |
+| HIPAA compliance (US) | Local Ollama approach is HIPAA-friendly — no external transfer |
 
-For personal/family use, OpenAI's standard terms are generally acceptable. For a commercial product handling patient data in the US, HIPAA compliance is legally required.
+The `medextract` library uses Ollama exclusively — all processing is local, no data is sent to any external server.
 
 ---
 
-## 10. API Cost Estimate (GPT-4o vs Gemini)
+## 10. API Cost Estimate (Cloud vs Local)
 
-### GPT-4o pricing (approximate per image):
-| Detail level | Cost per image |
+### Local Ollama (current approach):
+| Volume | Cost |
 |---|---|
-| Low detail | ~$0.00255 |
-| High detail | ~$0.01275 |
+| Any number of images | **$0** — runs on your hardware |
 
-### Gemini 1.5 Flash pricing (approximate per image):
-| Volume | Cost per image |
+### Cloud LLM pricing (for comparison):
+
+| Provider | Cost per image |
 |---|---|
-| Under 1M tokens/month | ~$0.00035 |
+| Gemini 1.5 Flash | ~$0.00035 |
+| GPT-4o (low detail) | ~$0.00255 |
+| GPT-4o (high detail) | ~$0.01275 |
 
-### Comparison at scale:
-| Images | GPT-4o (low) | Gemini Flash |
-|---|---|---|
-| 100 | ~$0.26 | ~$0.04 |
-| 1,000 | ~$2.55 | ~$0.35 |
-| 10,000 | ~$25.50 | ~$3.50 |
-
-**Recommendation:** Use Gemini 1.5 Flash as the primary model. Fall back to GPT-4o only for low-confidence results. This cuts costs by ~85%.
+| Images | Gemini Flash | GPT-4o (low) | Local Ollama |
+|---|---|---|---|
+| 100 | ~$0.04 | ~$0.26 | **$0** |
+| 1,000 | ~$0.35 | ~$2.55 | **$0** |
+| 10,000 | ~$3.50 | ~$25.50 | **$0** |
 
 ---
 
@@ -582,53 +575,69 @@ For personal/family use, OpenAI's standard terms are generally acceptable. For a
 
 ---
 
-## 12. Recommended Development Roadmap
+## 12. Development Roadmap
 
-### Phase 1 — Harden Current Script ✅ COMPLETED
-- ~~Move `API_KEY` and folder path to `.env` file~~ → Switched to Ollama (no API key needed)
-- ~~Fix `display(df)` crash~~ → Fixed, uses `df.to_string()`
-- ~~Add BP classification column~~ → Done (Normal → HYPERTENSIVE CRISIS)
-- ~~Write failed images to log~~ → Done (`failed_images.txt` on Desktop)
-- ~~Full field extraction (14 fields)~~ → Done (systolic, diastolic, pulse, brand, date, time, memory_slot, ihb, afib, error_code, user, battery_low, has_glare, confidence)
-- ~~Parallel processing~~ → Done (3 workers via `ThreadPoolExecutor`)
-- ~~Output CSV to fixed path~~ → Saves to `~/Desktop/medical device data new.csv`
+### Phase 1 — Initial Script ✅ COMPLETED (2026-04-20)
+- Single-file script using Gemini 1.5 Flash
+- 5-field extraction: systolic, diastolic, pulse, brand, has_glare
+- Exponential backoff retry (up to 5 attempts)
+- CSV export
 
-**Current stack:** Ollama + MedGemma 1.5 4b — fully local, no API key, no cost, no rate limits
+### Phase 2 — Local Model + Hardening ✅ COMPLETED (2026-04-25)
+- Switched to Ollama + MedGemma 1.5 4b — no API key, no cost, no rate limits
+- 14-field extraction (added date, time, memory_slot, ihb, afib, error_code, user, battery_low, confidence)
+- Parallel processing (`ThreadPoolExecutor`, 3 workers default)
+- BP classification (Normal → HYPERTENSIVE CRISIS)
+- Retry logic (configurable `max_retries`)
+- Removed all hardcoded personal paths
 
-### Phase 2 — Python Library ✅ COMPLETED (2026-04-25)
-- ~~Convert script into installable `medextract` package~~ → Done (`pip install -e .`)
-- ~~Remove all global state~~ → All config is function parameters with defaults
-- ~~Fix library logging~~ → `NullHandler` used; caller controls logging
-- ~~Expose clean public API~~ → `extract_folder()`, `analyze_image()`, `classify_bp()`, `validate_bp()`
-- ~~Add CLI entry point~~ → `python3 -m medextract.cli <folder> --output results.csv`
-- ~~Verify on real images~~ → Tested on Omron and Meditech BP-12, correct readings confirmed
+### Phase 3 — Python Library ✅ COMPLETED (2026-04-25)
+- Converted to installable `medextract` package
+- Clean public API: `extract_folder()`, `analyze_image()`, `classify_bp()`, `validate_bp()`
+- CLI entry point: `python3 -m medextract.cli`
+- No global state — all config as function parameters with defaults
+- `NullHandler` logging — caller controls logging
+- Verified on real Omron and Meditech BP-12 images
 
 **Verified results:**
 
-| Image | BP | Pulse | Brand | Confidence |
-|---|---|---|---|---|
-| Unknown-2.jpeg (Meditech BP-12) | 130/80 | 76 | MEDITECH | 10/10 |
-| 20210805_..._F_3000_4000.jpg (Omron) | 140/80 | 70 | Omron | 10/10 |
+| Image | BP | Pulse | Brand | Confidence | Category |
+|---|---|---|---|---|---|
+| Unknown-2.jpeg (Meditech BP-12) | 130/80 | 76 | MEDITECH | 10/10 | Stage 1 Hypertension |
+| 20210805_..._F_3000_4000.jpg (Omron) | 140/80 | 70 | Omron | 10/10 | Stage 2 Hypertension |
 
-### Phase 3 — CLI Tool (1 week)
-- `argparse` interface: `--device [bp|glucose]`, `--folder`, `--output`
-- `--resume` flag to skip already-processed images
-- `--validate` flag to print out-of-range warnings
-- `--dry-run` flag to check images without API calls
+### Phase 4 — Production Ready ✅ COMPLETED (2026-04-25)
+- **37 pytest tests** — all passing, Ollama fully mocked (no model required to run tests)
+- `check_ollama()` — friendly `RuntimeError` if Ollama not running or model not pulled
+- **Input validation** — `ValueError` with clear message for invalid `workers`, `image_size`, `max_retries`
+- **Confidence clamping** — always 1–10 regardless of model output (`max(1, min(10, value))`)
+- **Pinned dependency versions** — `ollama>=0.6.1`, `pillow>=10.2.0`, `pandas>=2.1.1`, `tqdm>=4.66.1`
+- **tqdm progress bar** — live BP readout and ETA during batch processing
+- **Resume support** — `resume_csv` parameter skips images already in an existing CSV
+- **`--resume` CLI flag** — resumes from existing `--output` CSV
+- **GitHub Actions CI** — auto-runs tests on every push across Python 3.10, 3.11, 3.12
+- **Version consistent** — `pyproject.toml` and `__init__.py` both report `0.3.0`
+- Old scripts moved to `examples/` folder
 
-### Phase 3 — Local Web Dashboard (2–3 weeks)
+### Phase 5 — FastAPI Web Dashboard (Planned)
 - FastAPI backend with SQLite storage
 - Drag-and-drop image upload in browser
-- Trend charts (BP and glucose over time)
-- Color-coded classification (normal / elevated / hypertensive)
+- Trend charts (BP over time)
+- Color-coded classification
 - Export to CSV from UI
 
-### Phase 4 — Hybrid OCR Pipeline (3–4 weeks, optional)
+### Phase 6 — Glucometer Support (Planned)
+- `analyze_glucose_image()` function
+- New prompt template for glucometer displays
+- Unit detection (mg/dL vs mmol/L)
+- HI/LO indicator handling
+
+### Phase 7 — Hybrid OCR Pipeline (Optional Future)
 - Add Tesseract as fast-path for clean, well-lit images
-- Call Ollama/Gemini only when OCR confidence is low
+- Call Ollama only when OCR confidence is low
 - Reduces processing time by ~70% on good-quality images
 
-### Phase 5 — Cloud & Multi-Patient (if going commercial)
+### Phase 8 — Cloud & Multi-Patient (If Going Commercial)
 - User accounts and authentication
 - Mobile-friendly upload flow
 - Doctor sharing link (read-only view)
@@ -641,18 +650,15 @@ For personal/family use, OpenAI's standard terms are generally acceptable. For a
 
 | Situation | Best Approach |
 |---|---|
-| Personal use, getting started | LLM Vision API (Gemini Flash) + CSV |
+| Personal use, full privacy | Local Ollama + `medextract` library (current) |
 | Family / small clinic | FastAPI web app + SQLite |
-| Privacy-critical / offline | Local open-source model (LLaVA, Moondream) |
+| Cloud-hosted, no local GPU | Gemini 1.5 Flash API |
 | High volume (10k+ images/day) | Hybrid: Tesseract + LLM fallback |
 | Mobile consumer app | On-device ML (Core ML / ML Kit) |
 | Enterprise / HIPAA | Custom trained model + on-premise deployment |
 
-**Single best starting point:** Extend the current GPT-4o script to also support glucometers, switch to Gemini 1.5 Flash to cut costs, then build a FastAPI web interface around it. This gives you a working multi-device health data platform in 3–4 weeks with minimal infrastructure.
-
-**For unlimited, complete data extraction (no field limits):** Use the LLM Vision API (Gemini 1.5 Flash as primary, GPT-4o as fallback). It extracts every field in a single call, requires no retraining for new devices, understands symbols and error codes, and imposes no schema restrictions — making it the best choice when maximum data completeness is the priority over cost or speed.
+**Current state:** The `medextract` library (Phase 4) is production-ready. It handles personal and small-clinic use cases fully — local, private, free, with no rate limits, 37 passing tests, and CI on GitHub.
 
 ---
 
-
-*Document created: April 2026 | Project: Healthnexaa*
+*Document created: April 2026 | Project: Healthnexaa | Version: 0.4.0*

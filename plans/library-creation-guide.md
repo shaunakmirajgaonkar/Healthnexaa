@@ -1,14 +1,18 @@
 # Guide: Converting the BP Monitor Script into a Python Library
 
+**Version:** 0.4.0 | **Status:** Production Ready | **Tests:** 37 passing
+
 ## Overview
 
-This document describes how to convert the existing `medical_image_extraction_new.py` script into a
-proper, installable Python library called `medextract`. Once packaged, anyone can install it with
-`pip install medextract` and use it in their own code.
+This document describes how the `medextract` library was built — from a standalone script to a
+fully installable, tested Python package. The library is complete and production-ready.
+
+Anyone can install it with `pip install git+https://github.com/shaunakmirajgaonkar/Healthnexaa.git`
+and use it in their own code.
 
 ---
 
-## Current Problems with the Script
+## Problems the Original Script Had
 
 | Problem | Why It Matters |
 |---|---|
@@ -17,32 +21,44 @@ proper, installable Python library called `medextract`. Once packaged, anyone ca
 | No `__init__.py` | Python cannot import it as a module |
 | No `pyproject.toml` | Cannot be installed with pip |
 | All logic lives in `main()` | Nothing is reusable; callers can only run the whole pipeline |
+| No tests | No way to verify correctness without running against real devices |
+| No input validation | Bad parameters cause cryptic errors deep in the stack |
 
 ---
 
-## Target Package Structure
+## Final Package Structure
 
 ```
-medextract/                  ← the installable package
-├── __init__.py              ← public API (what users import)
-├── extractor.py             ← core logic, no global state
-└── cli.py                   ← command-line entry point only
+medextract/                  ← installable Python library
+├── __init__.py              ← public API (5 exports)
+├── extractor.py             ← core logic — no global state
+└── cli.py                   ← command-line interface
 
-pyproject.toml               ← packaging config (replaces setup.py)
+.github/workflows/
+└── tests.yml                ← CI — auto-runs tests on every push
+
+tests/
+└── test_extractor.py        ← 37 pytest tests, Ollama fully mocked
+
+examples/                    ← original standalone scripts (reference only)
+├── README.md
+└── *.py
+
+plans/                       ← project documentation
+pyproject.toml               ← package config, pinned deps
 ```
-
-Everything outside the `medextract/` folder (existing scripts, CSV files, plans) stays as-is.
 
 ---
 
-## Step 1 — Create `medextract/extractor.py`
+## Step 1 — `medextract/extractor.py`
 
-This file holds all reusable logic. Key changes from the current script:
+Core logic. No global state. Everything is a function parameter with a sensible default.
 
-- No module-level constants. Everything becomes a function parameter with a sensible default.
-- Replace `logging.basicConfig()` with `logging.getLogger(__name__).addHandler(logging.NullHandler())`.
-  This is the standard library convention: let the caller configure logging.
-- Expose a single high-level function `extract_folder()` that the caller can use end-to-end.
+Key rules enforced:
+- `NullHandler` only — caller controls logging, library never calls `basicConfig()`
+- All public functions validate parameters and raise `ValueError` or `RuntimeError` with clear messages
+- Confidence always clamped to 1–10 before returning
+- Resume support via `already_done` set built from existing CSV
 
 ```python
 """
@@ -60,7 +76,9 @@ from io import BytesIO
 from pathlib import Path
 
 import ollama
+import pandas as pd
 from PIL import Image, UnidentifiedImageError
+from tqdm import tqdm
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 log = logging.getLogger(__name__)
@@ -85,6 +103,20 @@ every visible value. Return ONLY a valid JSON object — no markdown, no extra t
   "has_glare":   <true if glare affects readability, else false>,
   "confidence":  <int 1-10, your confidence in the reading>
 }"""
+
+
+def check_ollama(model: str = "medgemma1.5:4b") -> None:
+    """Raise RuntimeError if Ollama is not running or the model is not pulled."""
+    try:
+        pulled = [m["model"] for m in ollama.list()["models"]]
+    except Exception:
+        raise RuntimeError(
+            "Ollama is not running. Start it with: ollama serve"
+        )
+    if model not in pulled:
+        raise RuntimeError(
+            f"Model '{model}' is not pulled. Run: ollama pull {model}"
+        )
 
 
 def load_image_b64(image_path: Path, image_size: int = 512) -> str | None:
@@ -125,6 +157,7 @@ def analyze_image(
                 raise ValueError("No JSON found in response")
             data = json.loads(raw[start:end])
             data["file_name"] = image_path.name
+            data["confidence"] = max(1, min(10, int(data.get("confidence", 5))))
             return data
         except Exception as e:
             log.warning("Attempt %d/%d failed for %s: %s", attempt, max_retries, image_path.name, e)
@@ -171,19 +204,47 @@ def extract_folder(
     workers: int = 3,
     image_size: int = 512,
     max_retries: int = 3,
+    resume_csv: str | None = None,
 ) -> list[dict]:
     """
     Process every image in `folder` and return a list of result dicts.
 
-    Each dict contains the extracted BP fields plus:
-      - bp_classification: AHA category string
-      - extracted_at: ISO timestamp string
+    Raises ValueError for invalid parameters.
+    Raises RuntimeError if Ollama is not running or model is not pulled.
     """
+    # Input validation — fail fast with clear messages
+    if workers < 1:
+        raise ValueError(f"workers must be >= 1, got {workers}")
+    if image_size < 64:
+        raise ValueError(f"image_size must be >= 64, got {image_size}")
+    if max_retries < 1:
+        raise ValueError(f"max_retries must be >= 1, got {max_retries}")
+
+    check_ollama(model)
+
     folder = Path(folder)
+    if not folder.exists():
+        raise ValueError(f"Folder does not exist: {folder}")
+
     images = sorted(f for f in folder.iterdir() if f.suffix.lower() in EXTENSIONS)
     if not images:
         log.warning("No images found in %s", folder)
         return []
+
+    # Resume: skip images already in existing CSV
+    already_done: set[str] = set()
+    existing_rows: list[dict] = []
+    if resume_csv is not None:
+        resume_path = Path(resume_csv)
+        if resume_path.exists():
+            existing_df = pd.read_csv(resume_path)
+            already_done = set(existing_df["file_name"].tolist())
+            existing_rows = existing_df.to_dict("records")
+
+    images = [img for img in images if img.name not in already_done]
+    if not images:
+        log.info("All images already processed (resume_csv).")
+        return existing_rows
 
     results: dict[int, dict] = {}
 
@@ -194,37 +255,42 @@ def extract_folder(
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_process, (i, img)): i for i, img in enumerate(images)}
-        for future in as_completed(futures):
-            idx, result = future.result()
-            if result:
-                result["bp_classification"] = classify_bp(
-                    result.get("systolic", 0), result.get("diastolic", 0)
-                )
-                result["extracted_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                results[idx] = result
+        with tqdm(total=len(images), unit="img") as bar:
+            for future in as_completed(futures):
+                idx, result = future.result()
+                if result:
+                    result["bp_classification"] = classify_bp(
+                        result.get("systolic", 0), result.get("diastolic", 0)
+                    )
+                    result["extracted_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    results[idx] = result
+                    bar.set_postfix(
+                        bp=f"{result.get('systolic', 0)}/{result.get('diastolic', 0)}"
+                    )
+                bar.update(1)
 
-    return [results[i] for i in sorted(results)]
+    new_rows = [results[i] for i in sorted(results)]
+    return existing_rows + new_rows
 ```
 
 ---
 
-## Step 2 — Create `medextract/__init__.py`
-
-This controls what users see when they do `from medextract import ...`.
+## Step 2 — `medextract/__init__.py`
 
 ```python
 """medextract — extract readings from medical device images using a local LLM."""
 
-from .extractor import analyze_image, classify_bp, extract_folder, validate_bp
+from .extractor import analyze_image, check_ollama, classify_bp, extract_folder, validate_bp
 
-__all__ = ["extract_folder", "analyze_image", "classify_bp", "validate_bp"]
+__version__ = "0.3.0"
+__all__ = ["extract_folder", "analyze_image", "classify_bp", "validate_bp", "check_ollama"]
 ```
 
 ---
 
-## Step 3 — Create `medextract/cli.py`
+## Step 3 — `medextract/cli.py`
 
-The CLI is a thin wrapper. It parses arguments and calls `extract_folder()`.
+The CLI is a thin wrapper. All logic stays in `extractor.py`.
 
 ```python
 """medextract/cli.py — command-line entry point."""
@@ -263,6 +329,8 @@ def main():
     parser.add_argument("--workers", type=int, default=3)
     parser.add_argument("--image-size", type=int, default=512)
     parser.add_argument("--max-retries", type=int, default=3)
+    parser.add_argument("--resume", action="store_true",
+                        help="Skip images already in the output CSV")
     args = parser.parse_args()
 
     rows = extract_folder(
@@ -271,6 +339,7 @@ def main():
         workers=args.workers,
         image_size=args.image_size,
         max_retries=args.max_retries,
+        resume_csv=args.output if args.resume else None,
     )
 
     if not rows:
@@ -290,11 +359,11 @@ if __name__ == "__main__":
 
 ---
 
-## Step 4 — Create `pyproject.toml`
+## Step 4 — `pyproject.toml`
 
-Place this in the repo root (same level as `medextract/`).
-
-> **Note:** Use `setuptools>=42` with `setuptools.build_meta` — the newer `setuptools.backends.legacy:build` requires a very recent setuptools version and will fail on most machines.
+> **Important:** Use `setuptools>=42` with `setuptools.build_meta` — the newer
+> `setuptools.backends.legacy:build` requires a very recent setuptools version and will fail on
+> many machines.
 
 ```toml
 [build-system]
@@ -303,17 +372,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "medextract"
-version = "0.1.0"
+version = "0.3.0"
 description = "Extract readings from medical device images using a local LLM (Ollama + MedGemma)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 keywords = ["medical", "blood-pressure", "ocr", "llm", "ollama"]
 dependencies = [
-    "ollama",
-    "pillow",
-    "pandas",
+    "ollama>=0.6.1",
+    "pillow>=10.2.0",
+    "pandas>=2.1.1",
+    "tqdm>=4.66.1",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-mock>=3.12"]
 
 [project.scripts]
 medextract = "medextract.cli:main"
@@ -325,7 +398,59 @@ include = ["medextract*"]
 
 ---
 
-## Step 5 — Install and Test
+## Step 5 — `tests/test_extractor.py`
+
+37 tests covering all public functions. Ollama is fully mocked — tests run without a model.
+
+```bash
+pip install -e ".[dev]"
+pytest tests/ -v
+```
+
+Test groups:
+
+| Class | Tests | What It Covers |
+|---|---|---|
+| `TestClassifyBP` | 10 | All AHA categories, edge values |
+| `TestValidateBP` | 8 | Out-of-range, inversion, boundary values |
+| `TestLoadImageB64` | 5 | Image load, resize, bad file, non-RGB |
+| `TestCheckOllama` | 3 | Running, not running, model missing |
+| `TestAnalyzeImage` | 5 | Success, retry, markdown stripping, confidence clamp |
+| `TestExtractFolderValidation` | 4 | workers/image_size/max_retries ValueError, missing folder |
+| `TestExtractFolderResume` | 2 | Skips already-done, returns combined rows |
+
+---
+
+## Step 6 — `.github/workflows/tests.yml` (CI)
+
+GitHub Actions runs the full test suite on every push and pull request across Python 3.10, 3.11, and 3.12.
+
+```yaml
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/ -v
+```
+
+---
+
+## Step 7 — Install and Test
 
 ### Install locally (editable mode — changes take effect immediately)
 
@@ -346,21 +471,22 @@ for row in rows:
 ### Test the CLI
 
 ```bash
-medextract /path/to/images --output results.csv --workers 4
+python3 -m medextract.cli /path/to/images --output results.csv --workers 4
+```
+
+### Run the test suite
+
+```bash
+pytest tests/ -v
 ```
 
 ---
 
-## Step 6 — Publish to PyPI (optional, for public distribution)
+## Step 8 — Publish to PyPI (pending)
 
 ```bash
-# Install build tools
 pip install build twine
-
-# Build the distribution
 python -m build
-
-# Upload to PyPI (you need a PyPI account and API token)
 twine upload dist/*
 ```
 
@@ -379,36 +505,34 @@ pip install medextract
 | Global `IMAGE_FOLDER`, `MODEL` constants | Parameters with defaults on `extract_folder()` |
 | `logging.basicConfig()` at top level | `NullHandler` in library; `basicConfig` only in `cli.py` |
 | Single flat `.py` file | `medextract/` package with 3 focused modules |
-| No install path | `pip install -e .` or `pip install medextract` |
+| No install path | `pip install -e .` or from GitHub |
 | Run with `python script.py` | Import in code or run `python3 -m medextract.cli` |
+| No tests | 37 pytest tests — all passing, Ollama fully mocked |
+| No input validation | `ValueError` with clear message before processing starts |
+| No Ollama check | `check_ollama()` raises `RuntimeError` with fix instructions |
+| No progress feedback | tqdm progress bar with live BP readout and ETA |
+| No resume | `resume_csv` parameter skips already-processed images |
+| No CI | GitHub Actions across Python 3.10, 3.11, 3.12 |
 
 ---
 
-## Status — IMPLEMENTED ✅ (2026-04-25)
+## Status — PRODUCTION READY ✅ (2026-04-25)
 
-All files have been created and the library is installed and verified working.
+All files created, tested, and verified working.
 
-**Confirmed working on:**
+**Verified on:**
 - Python 3.12, macOS Darwin 25.4.0
 - Ollama + `medgemma1.5:4b` (3.3 GB local model)
-- Real Omron and Meditech BP monitor photos
+- Real Omron and Meditech BP-12 photos
 
-**Sample output from real images:**
+**Verified test results:**
 
-```
-Image: Unknown-2.jpeg (Meditech BP-12)
-  Systolic : 130
-  Diastolic: 80
-  Pulse    : 76
-  Brand    : MEDITECH
-  Confidence: 10 / 10
-  Category : Stage 1 Hypertension
+| Image | Device | BP | Pulse | Brand | Confidence | Category |
+|---|---|---|---|---|---|---|
+| Unknown-2.jpeg | Meditech BP-12 | 130/80 | 76 | MEDITECH | 10/10 | Stage 1 Hypertension |
+| 20210805_..._F_3000_4000.jpg | Omron | 140/80 | 70 | Omron | 10/10 | Stage 2 Hypertension |
+| Unknown-9.jpeg | Unknown (glare) | 0/0 | 0 | Unknown | 5/10 | Unknown (handled gracefully) |
 
-Image: 20210805_..._F_3000_4000.jpg (Omron)
-  Systolic : 140
-  Diastolic: 80
-  Pulse    : 70
-  Brand    : Omron
-  Confidence: 10 / 10
-  Category : Stage 2 Hypertension
-```
+**Automated tests:** 37 / 37 PASS
+
+**CI:** GitHub Actions passing on Python 3.10, 3.11, 3.12
