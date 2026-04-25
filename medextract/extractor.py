@@ -171,6 +171,13 @@ def extract_folder(
     Raises FileNotFoundError if the folder does not exist.
     Supported formats: .png, .jpg, .jpeg, .webp
     """
+    if workers < 1:
+        raise ValueError(f"workers must be >= 1, got {workers}")
+    if image_size < 64:
+        raise ValueError(f"image_size must be >= 64, got {image_size}")
+    if max_retries < 1:
+        raise ValueError(f"max_retries must be >= 1, got {max_retries}")
+
     check_ollama(model)
 
     folder = Path(folder)

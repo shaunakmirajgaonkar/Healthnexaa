@@ -4,6 +4,18 @@ All notable changes to this project will be documented here.
 
 ---
 
+## [0.4.0] — 2026-04-25
+
+### Added
+- GitHub Actions CI (`/.github/workflows/tests.yml`) — tests run automatically on every push and PR across Python 3.10, 3.11, and 3.12
+- Input validation in `extract_folder()` — raises `ValueError` with clear message for invalid `workers`, `image_size`, or `max_retries`
+- 4 new tests for input validation and missing folder (37 total, all passing)
+
+### Fixed
+- Version mismatch — `pyproject.toml` and `__init__.py` now both correctly report `0.3.0`
+
+---
+
 ## [0.3.0] — 2026-04-25
 
 ### Added

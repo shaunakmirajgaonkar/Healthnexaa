@@ -74,13 +74,19 @@ A Python library (`medextract`) that reads blood pressure monitor photos using a
 - ~~Cap confidence to 1–10~~ → Done — clamped in `analyze_image()` after parsing
 - ~~Clean up repo root~~ → Done — old scripts moved to `examples/` with README
 
+## Phase 4 — Production Ready ✅ COMPLETED (2026-04-25)
+
+- ~~Fix version mismatch~~ → `pyproject.toml` and `__init__.py` both now report `0.3.0`
+- ~~Add GitHub Actions CI~~ → Tests run on every push/PR across Python 3.10, 3.11, 3.12
+- ~~Add input validation~~ → `ValueError` raised for invalid `workers`, `image_size`, `max_retries`
+- ~~37 tests passing~~ → Added 4 new validation tests
+
 ## Remaining Next Steps
 
 | Priority | Task |
 |---|---|
 | Medium | Publish to PyPI so others can `pip install medextract` |
 | Medium | Add glucometer support (`analyze_glucose_image()`) |
-| Medium | Add `--resume` flag to skip already-processed images |
 | Low | Add a `--dry-run` flag to validate images without calling Ollama |
 | Low | Build a FastAPI web dashboard for drag-and-drop upload + trend charts |
 

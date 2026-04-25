@@ -222,6 +222,29 @@ class TestAnalyzeImage:
 # extract_folder — resume
 # ---------------------------------------------------------------------------
 
+class TestExtractFolderValidation:
+    def test_invalid_workers_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="workers must be >= 1"):
+            extract_folder(tmp_path, workers=0)
+
+    def test_invalid_image_size_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="image_size must be >= 64"):
+            extract_folder(tmp_path, image_size=10)
+
+    def test_invalid_max_retries_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="max_retries must be >= 1"):
+            extract_folder(tmp_path, max_retries=0)
+
+    def test_missing_folder_raises(self):
+        with pytest.raises(FileNotFoundError):
+            mock_model = MagicMock()
+            mock_model.model = "medgemma1.5:4b"
+            mock_response = MagicMock()
+            mock_response.models = [mock_model]
+            with patch("ollama.list", return_value=mock_response):
+                extract_folder("/nonexistent/path/xyz")
+
+
 class TestExtractFolderResume:
     def _make_images(self, folder: Path, count: int):
         for i in range(count):

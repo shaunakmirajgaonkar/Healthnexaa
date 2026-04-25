@@ -163,7 +163,9 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-31 tests covering `classify_bp`, `validate_bp`, image loading, Ollama checks, and `analyze_image` with mocked responses.
+37 tests covering `classify_bp`, `validate_bp`, image loading, Ollama checks, input validation, resume, and `analyze_image` with mocked responses.
+
+Tests run automatically on every push and pull request via GitHub Actions across Python 3.10, 3.11, and 3.12.
 
 ---
 
