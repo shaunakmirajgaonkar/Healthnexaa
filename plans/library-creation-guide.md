@@ -482,15 +482,17 @@ pytest tests/ -v
 
 ---
 
-## Step 8 — Publish to PyPI (pending)
+## Step 8 — Publish to PyPI ✅ (2026-04-25)
 
 ```bash
 pip install build twine
-python -m build
-twine upload dist/*
+python3 -m build
+python3 -m twine upload dist/* --username __token__ --password <your-pypi-token>
 ```
 
-After publishing, anyone can install it with:
+**Live on PyPI:** https://pypi.org/project/medextract/0.3.0/
+
+Anyone can now install it with:
 
 ```bash
 pip install medextract
@@ -505,7 +507,7 @@ pip install medextract
 | Global `IMAGE_FOLDER`, `MODEL` constants | Parameters with defaults on `extract_folder()` |
 | `logging.basicConfig()` at top level | `NullHandler` in library; `basicConfig` only in `cli.py` |
 | Single flat `.py` file | `medextract/` package with 3 focused modules |
-| No install path | `pip install -e .` or from GitHub |
+| No install path | `pip install medextract` (PyPI) or `pip install -e .` (local) |
 | Run with `python script.py` | Import in code or run `python3 -m medextract.cli` |
 | No tests | 37 pytest tests — all passing, Ollama fully mocked |
 | No input validation | `ValueError` with clear message before processing starts |
@@ -516,9 +518,13 @@ pip install medextract
 
 ---
 
-## Status — PRODUCTION READY ✅ (2026-04-25)
+## Status — PUBLISHED ON PyPI ✅ (2026-04-25)
 
-All files created, tested, and verified working.
+All files created, tested, verified, and published to PyPI.
+
+**Install:** `pip install medextract`
+**PyPI:** https://pypi.org/project/medextract/0.3.0/
+**GitHub:** https://github.com/shaunakmirajgaonkar/Healthnexaa
 
 **Verified on:**
 - Python 3.12, macOS Darwin 25.4.0

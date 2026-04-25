@@ -4,6 +4,17 @@ All notable changes to this project will be documented here.
 
 ---
 
+## [0.3.0] — PyPI Release — 2026-04-25
+
+### Added
+- Published to PyPI — `pip install medextract` now works worldwide
+- PyPI page: https://pypi.org/project/medextract/0.3.0/
+
+### Fixed
+- `pyproject.toml` license field updated to SPDX string format (`"MIT"` instead of `{ text = "MIT" }`)
+
+---
+
 ## [0.4.0] — 2026-04-25
 
 ### Added

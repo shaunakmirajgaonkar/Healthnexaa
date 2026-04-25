@@ -103,11 +103,19 @@ A fully installable Python library (`medextract`) that extracts blood pressure r
 
 ---
 
+## Phase 5 — PyPI Publish ✅ (2026-04-25)
+
+- Published to PyPI — `pip install medextract` works worldwide
+- PyPI page: https://pypi.org/project/medextract/0.3.0/
+- Fixed `pyproject.toml` license field to SPDX string format
+- README and usage guide updated to show PyPI as primary install method
+
+---
+
 ## Remaining Next Steps
 
 | Priority | Task |
 |---|---|
-| Medium | Publish to PyPI — `pip install medextract` |
 | Medium | Add glucometer support (`analyze_glucose_image()`) |
 | Low | Add `--dry-run` flag to validate images without calling Ollama |
 | Low | Build FastAPI web dashboard for drag-and-drop upload + trend charts |
