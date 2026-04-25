@@ -3,4 +3,6 @@ __pycache__/
 *.pyo
 .DS_Store
 medextract.egg-info/
+.pytest_cache/
 *.csv
+.env
