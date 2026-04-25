@@ -7,7 +7,7 @@ Built on [Ollama](https://ollama.com) + MedGemma, the library processes photos o
 ![Tests](https://github.com/shaunakmirajgaonkar/Healthnexaa/actions/workflows/tests.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-0.3.0-blue)
+![Version](https://img.shields.io/badge/version-0.3.1-blue)
 ![PyPI](https://img.shields.io/pypi/v/medextract)
 
 ---

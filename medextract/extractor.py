@@ -102,6 +102,10 @@ def analyze_image(
             data["file_name"] = image_path.name
             # Clamp confidence to 1–10 regardless of what the model returns
             data["confidence"] = max(1, min(10, int(data.get("confidence", 5))))
+            data["bp_classification"] = classify_bp(
+                data.get("systolic", 0), data.get("diastolic", 0)
+            )
+            data["extracted_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             return data
         except Exception as e:
             log.warning("Attempt %d/%d failed for %s: %s", attempt, max_retries, image_path.name, e)

@@ -4,6 +4,14 @@ All notable changes to this project will be documented here.
 
 ---
 
+## [0.3.1] — 2026-04-25
+
+### Fixed
+- `analyze_image()` now returns `bp_classification` and `extracted_at` in every result dict,
+  consistent with `extract_folder()` output — previously these fields were missing
+
+---
+
 ## [0.3.0] — PyPI Release — 2026-04-25
 
 ### Added
