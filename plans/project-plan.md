@@ -66,6 +66,14 @@ A Python library (`medextract`) that reads blood pressure monitor photos using a
 
 ---
 
+## Phase 3 — Production Hardening ✅ COMPLETED (2026-04-25)
+
+- ~~Write a formal test suite~~ → Done — 31 pytest tests, all passing, Ollama fully mocked
+- ~~Pin dependency versions~~ → Done (`ollama>=0.6.1`, `pillow>=10.2.0`, `pandas>=2.1.1`)
+- ~~Add Ollama not-running check~~ → Done — `check_ollama()` raises clear `RuntimeError`
+- ~~Cap confidence to 1–10~~ → Done — clamped in `analyze_image()` after parsing
+- ~~Clean up repo root~~ → Done — old scripts moved to `examples/` with README
+
 ## Remaining Next Steps
 
 | Priority | Task |
@@ -75,7 +83,6 @@ A Python library (`medextract`) that reads blood pressure monitor photos using a
 | Medium | Add `--resume` flag to skip already-processed images |
 | Low | Add a `--dry-run` flag to validate images without calling Ollama |
 | Low | Build a FastAPI web dashboard for drag-and-drop upload + trend charts |
-| Low | Write a formal test suite (`pytest`) with mocked Ollama responses |
 
 ---
 

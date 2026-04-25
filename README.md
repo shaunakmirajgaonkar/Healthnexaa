@@ -134,6 +134,17 @@ python3 -m medextract.cli /path/to/photos --output results.csv --workers 4
 
 ---
 
+## Running Tests
+
+```bash
+pip install -e ".[dev]"
+pytest tests/ -v
+```
+
+31 tests covering `classify_bp`, `validate_bp`, image loading, Ollama checks, and `analyze_image` with mocked responses.
+
+---
+
 ## Project Structure
 
 ```
@@ -141,6 +152,13 @@ medextract/          ← installable Python library
 ├── __init__.py      ← public API
 ├── extractor.py     ← core extraction logic
 └── cli.py           ← command-line interface
+
+tests/               ← pytest test suite (31 tests)
+└── test_extractor.py
+
+examples/            ← original standalone scripts (reference only)
+├── README.md
+└── *.py
 
 plans/               ← project documentation
 ├── usage-guide.md

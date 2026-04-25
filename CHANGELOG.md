@@ -4,6 +4,22 @@ All notable changes to this project will be documented here.
 
 ---
 
+## [0.2.0] — 2026-04-25
+
+### Added
+- `check_ollama()` — raises a clear `RuntimeError` if Ollama is not running or the model is not pulled
+- `tests/` — full pytest suite with 31 tests covering all public functions (mocked Ollama)
+- `examples/` folder — old standalone scripts moved here with a README
+- `[dev]` optional dependency group: `pytest>=8.0`, `pytest-mock>=3.12`
+
+### Changed
+- Confidence field now always clamped to 1–10 regardless of model output
+- Dependency versions pinned in `pyproject.toml` (`ollama>=0.6.1`, `pillow>=10.2.0`, `pandas>=2.1.1`)
+- `extract_folder()` now calls `check_ollama()` before processing — fails fast with a helpful message
+- Old scripts moved from repo root to `examples/` to reduce clutter
+
+---
+
 ## [0.1.0] — 2026-04-25
 
 ### Added

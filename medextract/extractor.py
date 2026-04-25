@@ -40,6 +40,21 @@ every visible value. Return ONLY a valid JSON object — no markdown, no extra t
 }"""
 
 
+def check_ollama(model: str = "medgemma1.5:4b") -> None:
+    """Raise a clear RuntimeError if Ollama is not running or the model is not pulled."""
+    try:
+        available = [m.model for m in ollama.list().models]
+    except Exception:
+        raise RuntimeError(
+            "Ollama is not running. Start it with: ollama serve\n"
+            "Install from: https://ollama.com"
+        )
+    if not any(model in m for m in available):
+        raise RuntimeError(
+            f"Model '{model}' is not pulled. Run: ollama pull {model}"
+        )
+
+
 def load_image_b64(image_path: Path, image_size: int = 512) -> str | None:
     try:
         img = Image.open(image_path)
@@ -63,6 +78,7 @@ def analyze_image(
     """Extract BP readings from a single image file.
 
     Returns a dict of extracted fields, or None if the image could not be processed.
+    Raises RuntimeError if Ollama is not running or the model is not available.
     """
     image_path = Path(image_path)
     b64 = load_image_b64(image_path, image_size)
@@ -82,6 +98,8 @@ def analyze_image(
                 raise ValueError("No JSON found in response")
             data = json.loads(raw[start:end])
             data["file_name"] = image_path.name
+            # Clamp confidence to 1–10 regardless of what the model returns
+            data["confidence"] = max(1, min(10, int(data.get("confidence", 5))))
             return data
         except Exception as e:
             log.warning("Attempt %d/%d failed for %s: %s", attempt, max_retries, image_path.name, e)
@@ -137,8 +155,12 @@ def extract_folder(
       - bp_classification: AHA category string
       - extracted_at: timestamp string (YYYY-MM-DD HH:MM:SS)
 
+    Raises RuntimeError if Ollama is not running or the model is not pulled.
+    Raises FileNotFoundError if the folder does not exist.
     Supported formats: .png, .jpg, .jpeg, .webp
     """
+    check_ollama(model)
+
     folder = Path(folder)
     if not folder.exists():
         raise FileNotFoundError(f"Folder not found: {folder}")
