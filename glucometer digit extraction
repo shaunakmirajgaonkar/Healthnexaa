@@ -1,0 +1,222 @@
+"""
+glucometer.py — Glucometer Image Reader
+========================================
+Uses Groq Vision API (FREE, fast, no credit card).
+Get free key: console.groq.com → API Keys → Create API Key
+
+Requirements:
+    pip install groq pillow pandas
+"""
+
+import io, re, json, time, base64
+from pathlib import Path
+
+import pandas as pd
+from PIL import Image, ExifTags
+from groq import Groq
+
+# ══════════════════════════════════════════════
+# ✏️  CONFIGURE BEFORE RUNNING
+# ══════════════════════════════════════════════
+IMAGE_FOLDER  = Path('/Users/shaunak/Downloads/archive (9)/glucometer_images/test_samples_glucometer')
+CSV_OUTPUT    = Path('/Users/shaunak/Desktop/glucometer_readings.csv')
+SINGLE_FILE   = None
+# SINGLE_FILE = Path('/Users/shaunak/Desktop/gluc_1.jpg')
+
+GROQ_API_KEY  = ""   # ← paste key from console.groq.com
+MODEL         = "meta-llama/llama-4-scout-17b-16e-instruct"  # best free vision model on Groq
+MAX_IMAGE_DIM = 1568
+JPEG_QUALITY  = 95
+# ══════════════════════════════════════════════
+
+SUPPORTED_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"}
+
+PROMPT = """\
+This is a photo of a glucometer (blood glucose meter).
+
+Read the LARGEST number on the LCD screen — that is the glucose reading.
+Ignore small numbers like date, time, memory slot.
+
+LCD digit tips:
+  0 = no middle bar  |  8 = has middle bar
+  1 = single line    |  7 = has top bar
+  9 = missing bottom-left segment
+  3 = missing both left segments
+
+Return ONLY this JSON, nothing else:
+{"glucose_value": <integer or null>, "unit": "<mg/dL or mmol/L>", "device_brand": "<brand>", "notes": "<issues>"}"""
+
+# ──────────────────────────────────────────────
+# Image prep
+# ──────────────────────────────────────────────
+
+def _prepare(path: Path) -> str:
+    """Returns base64-encoded JPEG string."""
+    img = Image.open(path)
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    try:
+        exif = img._getexif()
+        if exif:
+            for tag, val in exif.items():
+                if ExifTags.TAGS.get(tag) == "Orientation":
+                    for src, deg in [(3,180),(6,270),(8,90)]:
+                        if val == src:
+                            img = img.rotate(deg, expand=True)
+    except Exception:
+        pass
+    w, h = img.size
+    if max(w, h) > MAX_IMAGE_DIM:
+        s = MAX_IMAGE_DIM / max(w, h)
+        img = img.resize((int(w*s), int(h*s)), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=JPEG_QUALITY)
+    return base64.b64encode(buf.getvalue()).decode()
+
+# ──────────────────────────────────────────────
+# Parse + validate
+# ──────────────────────────────────────────────
+
+def _parse(raw: str) -> dict:
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.DOTALL).strip()
+    m = re.search(r'\{.*?\}', cleaned, re.DOTALL)
+    return json.loads(m.group(0) if m else cleaned)
+
+def _to_int(v):
+    try: return int(v) if v is not None else None
+    except: return None
+
+def _validate(glucose, unit):
+    warns = []
+    if glucose is None:
+        warns.append("glucose=null")
+    elif unit == "mg/dL" and not (20 <= glucose <= 600):
+        warns.append(f"{glucose} out of range")
+    return warns
+
+# ──────────────────────────────────────────────
+# Per-image
+# ──────────────────────────────────────────────
+
+def extract(client: Groq, path: Path) -> dict:
+    fname = path.name
+    t0 = time.time()
+    try:
+        b64 = _prepare(path)
+    except Exception as e:
+        return _err(fname, f"load: {e}")
+    for attempt in range(3):
+        try:
+            response = client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": "You are a JSON-only response bot. You must always respond with valid JSON only. No markdown, no explanation, no steps."},
+                    {"role": "user", "content": [
+                        {"type": "image_url",
+                         "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                        {"type": "text", "text": PROMPT},
+                    ]},
+                ],
+                max_tokens=128,
+                response_format={"type": "json_object"},
+            )
+            raw = response.choices[0].message.content.strip()
+            # If model returned empty or non-JSON, retry with simpler prompt
+            if not raw or raw[0] not in ('{', '['):
+                if attempt < 2:
+                    time.sleep(1)
+                    continue
+            data = _parse(raw)
+            break
+        except json.JSONDecodeError:
+            if attempt < 2:
+                time.sleep(1)
+                continue
+            return _err(fname, f"JSON parse failed: {raw[:80]}")
+        except Exception as e:
+            return _err(fname, f"API: {e}")
+    else:
+        return _err(fname, "max retries exceeded")
+
+    glucose = _to_int(data.get("glucose_value"))
+    unit    = data.get("unit", "mg/dL")
+    brand   = data.get("device_brand", "")
+    notes   = data.get("notes", "")
+    warns   = _validate(glucose, unit)
+    elapsed = round(time.time()-t0, 2)
+
+    row = {
+        "file_name":     fname,
+        "glucose_mg_dL": glucose,
+        "unit":          unit,
+        "device_brand":  brand,
+        "notes":         notes,
+        "warnings":      "; ".join(warns),
+        "elapsed_s":     elapsed,
+    }
+    _print_row(row, warns)
+    return row
+
+def _err(fname, msg):
+    print(f"  ❌  {fname}: {msg}")
+    return {"file_name": fname, "error": msg, "glucose_mg_dL": None, "unit": None}
+
+def _print_row(row, warns):
+    g = str(row["glucose_mg_dL"]) if row["glucose_mg_dL"] is not None else "?"
+    warn_s = f"  ⚠️  {'; '.join(warns)}" if warns else ""
+    print(f"  ✅  {row['file_name']:<28} {g:>5} {str(row['unit']):<8} "
+          f"[{str(row.get('device_brand','')):<22}] {row['elapsed_s']}s{warn_s}")
+
+# ──────────────────────────────────────────────
+# Run
+# ──────────────────────────────────────────────
+
+def _make_client():
+    import os
+    key = GROQ_API_KEY or os.environ.get("GROQ_API_KEY", "")
+    if not key:
+        print("❌  No API key!")
+        print("    1. Go to console.groq.com")
+        print("    2. Sign up free → API Keys → Create API Key")
+        print("    3. Paste gsk_... key into GROQ_API_KEY at top of script")
+        raise SystemExit(1)
+    return Groq(api_key=key)
+
+def run_folder(folder: Path, output_csv: Path):
+    images = sorted(f for f in folder.iterdir() if f.suffix.lower() in SUPPORTED_EXT)
+    if not images:
+        print(f"❌  No images in {folder}"); return
+
+    client = _make_client()
+    print(f"\n🩸  {len(images)} images  |  {MODEL}  |  Groq free")
+    print(f"📁  {folder}\n")
+    print(f"  {'FILE':<28} {'GLUCOSE':>7} {'UNIT':<8} BRAND")
+    print(f"  {'─'*75}")
+
+    t0, rows = time.time(), []
+    for i, img in enumerate(images, 1):
+        print(f"  [{i}/{len(images)}] ", end="", flush=True)
+        rows.append(extract(client, img))
+        time.sleep(0.5)  # stay within free rate limit
+
+    elapsed = time.time()-t0
+    df = pd.DataFrame(rows)
+    cols = ["file_name","glucose_mg_dL","unit","device_brand","notes","warnings","elapsed_s","error"]
+    df[[c for c in cols if c in df.columns]].to_csv(output_csv, index=False)
+
+    print(f"\n{'─'*75}")
+    print(f"⏱   {elapsed:.1f}s  ({elapsed/len(images):.1f}s/image)")
+    print(f"📊  {output_csv}\n")
+    show = [c for c in ["file_name","glucose_mg_dL","unit","device_brand","warnings"] if c in df.columns]
+    print(df[show].to_string(index=False))
+
+def run_single(path: Path):
+    client = _make_client()
+    print(f"\n🩸  {path.name}  |  {MODEL}\n")
+    row = extract(client, path)
+    print("\nResult:")
+    for k, v in row.items(): print(f"  {k:<15}: {v}")
+
+if __name__ == "__main__":
+    if SINGLE_FILE: run_single(SINGLE_FILE)
+    else: run_folder(IMAGE_FOLDER, CSV_OUTPUT)
